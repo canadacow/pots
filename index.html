@@ -1,0 +1,1895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POTS Modem Emulator</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+  /* Terminal font stack: system monospace fonts with full CP437/Unicode coverage */
+  :root {
+    --term-font: 'Cascadia Mono', 'Consolas', 'SF Mono', 'Menlo',
+                 'DejaVu Sans Mono', 'Liberation Mono', 'Courier New', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: var(--term-font);
+  }
+
+  #monitor {
+    width: 900px;
+    max-width: 95vw;
+    background: #1a1a1a;
+    border-radius: 24px;
+    padding: 32px;
+    box-shadow:
+      0 0 60px rgba(0,255,65,0.05),
+      inset 0 0 80px rgba(0,0,0,0.6);
+    border: 2px solid #333;
+  }
+
+  #monitor-label {
+    text-align: center;
+    color: #555;
+    font-size: 14px;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    font-family: Arial, sans-serif;
+  }
+
+  #monitor-label span {
+    color: #888;
+    font-weight: bold;
+  }
+
+  #screen-bezel {
+    background: #111;
+    border-radius: 12px;
+    padding: 4px;
+    border: 2px solid #222;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.8);
+  }
+
+  #terminal {
+    background: #0d1a0d;
+    border-radius: 8px;
+    padding: 16px;
+    height: 560px;
+    overflow-y: auto;
+    position: relative;
+    box-shadow: inset 0 0 60px rgba(0,255,65,0.03);
+  }
+
+  /* CRT scanline effect */
+  #terminal::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(0,0,0,0.15) 0px,
+      rgba(0,0,0,0.15) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    pointer-events: none;
+    z-index: 1;
+    border-radius: 8px;
+  }
+
+  /* CRT flicker */
+  #terminal::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,255,65,0.015);
+    pointer-events: none;
+    z-index: 2;
+    border-radius: 8px;
+    animation: flicker 0.1s infinite alternate;
+  }
+
+  @keyframes flicker {
+    from { opacity: 0.95; }
+    to   { opacity: 1.0;  }
+  }
+
+  #output {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: #00ff41;
+    font-size: 16px;
+    line-height: 1.3;
+    text-shadow: 0 0 8px rgba(0,255,65,0.4);
+    position: relative;
+    z-index: 0;
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "clig" 0;
+    -webkit-font-feature-settings: "liga" 0, "clig" 0;
+  }
+
+  #input-line {
+    display: flex;
+    align-items: center;
+    margin-top: 2px;
+    position: relative;
+    z-index: 0;
+  }
+
+  #input-line .prompt {
+    color: #00ff41;
+    font-size: 16px;
+    text-shadow: 0 0 8px rgba(0,255,65,0.4);
+    white-space: pre;
+  }
+
+  #input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #00ff41;
+    font-family: var(--term-font);
+    font-size: 16px;
+    flex: 1;
+    caret-color: #00ff41;
+    text-shadow: 0 0 8px rgba(0,255,65,0.4);
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "clig" 0;
+    -webkit-font-feature-settings: "liga" 0, "clig" 0;
+  }
+
+  #cursor-blink {
+    display: inline-block;
+    width: 10px;
+    height: 20px;
+    background: #00ff41;
+    animation: blink 1s step-end infinite;
+    box-shadow: 0 0 8px rgba(0,255,65,0.4);
+    vertical-align: middle;
+  }
+
+  @keyframes blink {
+    50% { opacity: 0; }
+  }
+
+  /* Status LEDs */
+  #status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 16px;
+    padding: 0 8px;
+  }
+
+  #leds {
+    display: flex;
+    gap: 16px;
+  }
+
+  .led-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .led {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    transition: all 0.2s;
+  }
+
+  .led.on {
+    background: #00ff41;
+    box-shadow: 0 0 8px rgba(0,255,65,0.6);
+  }
+
+  .led.red.on {
+    background: #ff3333;
+    box-shadow: 0 0 8px rgba(255,51,51,0.6);
+  }
+
+  .led-label {
+    color: #555;
+    font-size: 10px;
+    font-family: Arial, sans-serif;
+    letter-spacing: 1px;
+  }
+
+  #display-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .toggle-label {
+    color: #555;
+    font-size: 9px;
+    font-family: Arial, sans-serif;
+    letter-spacing: 1px;
+  }
+  .toggle-label.active { color: #00ff41; }
+
+  .toggle-switch {
+    width: 32px;
+    height: 16px;
+    border-radius: 8px;
+    background: #1a3a1a;
+    border: 1px solid #333;
+    position: relative;
+    transition: background 0.2s;
+  }
+  .toggle-switch.on { background: #1a2a4a; }
+
+  .toggle-knob {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #00ff41;
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    transition: left 0.2s, background 0.2s;
+    box-shadow: 0 0 4px rgba(0,255,65,0.4);
+  }
+  .toggle-switch.on .toggle-knob {
+    left: 17px;
+    background: #66aaff;
+    box-shadow: 0 0 4px rgba(102,170,255,0.4);
+  }
+
+  #status-text {
+    color: #555;
+    font-size: 12px;
+    font-family: Arial, sans-serif;
+    letter-spacing: 1px;
+  }
+
+  /* Scrollbar */
+  #terminal::-webkit-scrollbar { width: 6px; }
+  #terminal::-webkit-scrollbar-track { background: #0d1a0d; }
+  #terminal::-webkit-scrollbar-thumb { background: #1a3a1a; border-radius: 3px; }
+
+  /* Hidden during command processing */
+  #input-line.hidden { display: none; }
+
+  /* xterm.js overlay for live BBS sessions */
+  #xterm-container {
+    display: none;
+    position: absolute;
+    top: 16px; left: 16px; right: 16px; bottom: 16px;
+    z-index: 3;
+    overflow: hidden;
+  }
+  #xterm-container.active {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #xterm-container .xterm { height: auto; }
+  /* Override xterm viewport to be transparent so CRT bleeds through */
+  #xterm-container .xterm-viewport {
+    background: transparent !important;
+    scrollbar-width: none !important;           /* Firefox */
+    -ms-overflow-style: none !important;        /* IE/Edge */
+  }
+  #xterm-container .xterm-viewport::-webkit-scrollbar {
+    display: none !important;                   /* Chrome/Safari */
+  }
+  #xterm-container .xterm-screen { background: transparent !important; }
+  #xterm-container * {
+    font-variant-ligatures: none !important;
+    font-feature-settings: "liga" 0, "clig" 0 !important;
+    -webkit-font-feature-settings: "liga" 0, "clig" 0 !important;
+  }
+</style>
+</head>
+<body>
+
+<div id="monitor">
+  <div id="monitor-label"><span>USRobotics</span> &mdash; Sportster 14.4 Fax/Modem</div>
+  <div id="screen-bezel">
+    <div id="terminal" tabindex="0">
+      <div id="output"></div>
+      <div id="input-line">
+        <span class="prompt"></span>
+        <input id="input" type="text" autocomplete="off" spellcheck="false" autofocus>
+        <span id="cursor-blink"></span>
+      </div>
+      <div id="xterm-container"></div>
+    </div>
+  </div>
+  <div id="status-bar">
+    <div id="leds">
+      <div class="led-group"><div class="led" id="led-pwr"></div><div class="led-label">PWR</div></div>
+      <div class="led-group"><div class="led" id="led-oh"></div><div class="led-label">OH</div></div>
+      <div class="led-group"><div class="led" id="led-cd"></div><div class="led-label">CD</div></div>
+      <div class="led-group"><div class="led" id="led-rd"></div><div class="led-label">RD</div></div>
+      <div class="led-group"><div class="led" id="led-sd"></div><div class="led-label">SD</div></div>
+      <div class="led-group"><div class="led" id="led-tr"></div><div class="led-label">TR</div></div>
+      <div class="led-group"><div class="led red" id="led-aa"></div><div class="led-label">AA</div></div>
+    </div>
+    <div id="display-toggle" title="Toggle color / green phosphor monochrome">
+      <span class="toggle-label">PHOSPHOR</span>
+      <div class="toggle-switch" id="color-toggle"><div class="toggle-knob"></div></div>
+      <span class="toggle-label">COLOR</span>
+    </div>
+    <div id="status-text">READY</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+
+<script>
+// ─── DOM refs ───────────────────────────────────────────────────────────
+const outputEl   = document.getElementById('output');
+const inputEl    = document.getElementById('input');
+const inputLine  = document.getElementById('input-line');
+const terminalEl = document.getElementById('terminal');
+const statusText = document.getElementById('status-text');
+
+const leds = {
+  pwr: document.getElementById('led-pwr'),
+  oh:  document.getElementById('led-oh'),
+  cd:  document.getElementById('led-cd'),
+  rd:  document.getElementById('led-rd'),
+  sd:  document.getElementById('led-sd'),
+  tr:  document.getElementById('led-tr'),
+  aa:  document.getElementById('led-aa'),
+};
+
+// ─── Audio context (lazy init for browser autoplay policies) ────────────
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+// ─── Modem State ────────────────────────────────────────────────────────
+const modem = {
+  echo: true,          // ATE1
+  verbose: true,       // ATV1
+  speaker: true,       // ATM1
+  speakerVol: 2,       // ATL2
+  registers: new Array(28).fill(0),
+  state: 'command',    // command | dialing | ringing | negotiating | connected
+  connectedBaud: 0,
+  lastDialed: '',
+};
+
+// S-register defaults
+modem.registers[0]  = 0;   // S0: rings to auto-answer
+modem.registers[2]  = 43;  // S2: escape char (+)
+modem.registers[6]  = 2;   // S6: wait for dial tone (seconds)
+modem.registers[7]  = 50;  // S7: wait for carrier (seconds)
+modem.registers[8]  = 2;   // S8: comma pause time
+modem.registers[12] = 50;  // S12: escape guard time (1/50 sec)
+
+let activeOscillators = [];
+let abortController = null;
+let ws = null;  // active WebSocket connection
+
+// ─── Phone Book ─────────────────────────────────────────────────────────
+// Maps dial strings to telnet host:port. Use ATDT<number> or ATDT<host:port>.
+const PHONEBOOK = {
+  '5551234':  { host: 'bbs.fozztexx.com',     port: 23,   name: 'FozzTexx BBS' },
+  '5552345':  { host: 'bbs.bottomlessabyss.net', port: 23, name: 'Bottomless Abyss' },
+  '5553456':  { host: 'particlesbbs.dyndns.org', port: 6400, name: 'Particles BBS' },
+  '5554567':  { host: 'bbs.starbase21.net',   port: 23,   name: 'Starbase 21' },
+  '5555678':  { host: 'bbs.retrocampus.com',  port: 23,   name: 'Retro Campus' },
+};
+
+const PROXY_URL = 'ws://localhost:8300';
+
+// Resolve a dial string to { host, port, name }
+function resolveDialTarget(dialStr) {
+  const cleaned = dialStr.replace(/[\s\-()]/g, '');
+
+  // Check phone book first
+  if (PHONEBOOK[cleaned]) return PHONEBOOK[cleaned];
+
+  // Allow direct host:port dialing  (e.g. ATDT bbs.example.com:23)
+  const hostMatch = cleaned.match(/^([a-zA-Z0-9.\-]+):(\d+)$/);
+  if (hostMatch) return { host: hostMatch[1], port: parseInt(hostMatch[2]), name: hostMatch[1] };
+
+  // Allow host-only (default to port 23)
+  const hostOnly = cleaned.match(/^([a-zA-Z][a-zA-Z0-9.\-]+)$/);
+  if (hostOnly) return { host: hostOnly[1], port: 23, name: hostOnly[1] };
+
+  // Unknown number → null (will simulate like before)
+  return null;
+}
+
+// ─── LED helpers ────────────────────────────────────────────────────────
+function ledOn(name)  { leds[name]?.classList.add('on'); }
+function ledOff(name) { leds[name]?.classList.remove('on'); }
+function allLedsOff() { Object.keys(leds).forEach(k => ledOff(k)); }
+
+function setStatus(text) { statusText.textContent = text; }
+
+// Power on
+ledOn('pwr');
+ledOn('tr');
+
+// ─── Terminal I/O ───────────────────────────────────────────────────────
+function print(text) {
+  outputEl.textContent += text;
+  terminalEl.scrollTop = terminalEl.scrollHeight;
+}
+
+function println(text) { print(text + '\r\n'); }
+
+function hideInput() { inputLine.classList.add('hidden'); }
+function showInput() {
+  inputLine.classList.remove('hidden');
+  inputEl.value = '';
+  inputEl.focus();
+  terminalEl.scrollTop = terminalEl.scrollHeight;
+}
+
+// ─── Sleep / abort helpers ──────────────────────────────────────────────
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+    }
+  });
+}
+
+// ─── Sound generation ───────────────────────────────────────────────────
+function stopAllSounds() {
+  activeOscillators.forEach(osc => {
+    try { osc.stop(); } catch(e) {}
+  });
+  activeOscillators = [];
+}
+
+function playTone(freq, duration, volume = 0.15) {
+  const ctx = ensureAudio();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+  gain.gain.value = volume;
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  activeOscillators.push(osc);
+  if (duration > 0) {
+    setTimeout(() => {
+      try { osc.stop(); } catch(e) {}
+      activeOscillators = activeOscillators.filter(o => o !== osc);
+    }, duration);
+  }
+  return osc;
+}
+
+function playDualTone(f1, f2, duration, volume = 0.1) {
+  const ctx = ensureAudio();
+  const osc1 = ctx.createOscillator();
+  const osc2 = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc1.type = 'sine';
+  osc2.type = 'sine';
+  osc1.frequency.value = f1;
+  osc2.frequency.value = f2;
+  gain.gain.value = volume;
+  osc1.connect(gain);
+  osc2.connect(gain);
+  gain.connect(ctx.destination);
+  osc1.start();
+  osc2.start();
+  activeOscillators.push(osc1, osc2);
+  if (duration > 0) {
+    setTimeout(() => {
+      try { osc1.stop(); } catch(e) {}
+      try { osc2.stop(); } catch(e) {}
+      activeOscillators = activeOscillators.filter(o => o !== osc1 && o !== osc2);
+    }, duration);
+  }
+  return [osc1, osc2];
+}
+
+// DTMF frequencies
+const DTMF = {
+  '1': [697,1209], '2': [697,1336], '3': [697,1477],
+  '4': [770,1209], '5': [770,1336], '6': [770,1477],
+  '7': [852,1209], '8': [852,1336], '9': [852,1477],
+  '*': [941,1209], '0': [941,1336], '#': [941,1477],
+};
+
+async function playDTMF(digit, signal) {
+  const freqs = DTMF[digit];
+  if (!freqs) return;
+  playDualTone(freqs[0], freqs[1], 120, 0.12);
+  await sleep(150, signal);
+}
+
+async function playDialTone(durationMs, signal) {
+  const oscs = playDualTone(350, 440, 0, 0.1);
+  await sleep(durationMs, signal);
+  oscs.forEach(o => { try { o.stop(); } catch(e) {} });
+  activeOscillators = activeOscillators.filter(o => !oscs.includes(o));
+}
+
+async function playRingback(count, signal) {
+  for (let i = 0; i < count; i++) {
+    const oscs = playDualTone(440, 480, 2000, 0.08);
+    await sleep(2000, signal);
+    oscs.forEach(o => { try { o.stop(); } catch(e) {} });
+    activeOscillators = activeOscillators.filter(o => !oscs.includes(o));
+    // After last ring, short pause before answer; between rings, full 4s gap
+    await sleep(i < count - 1 ? 4000 : 500, signal);
+  }
+}
+
+// ─── V.32bis / MNP4 PCM Audio Synthesis ─────────────────────────────
+// All negotiation audio is generated as PCM Float32 buffers for accuracy.
+// This faithfully models the ITU-T V.32bis handshake phases and
+// Microcom MNP Class 4 error-correction link negotiation.
+
+function playPCMBuffer(samples, volume = 0.15) {
+  const ctx = ensureAudio();
+  const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
+  buffer.getChannelData(0).set(samples);
+  const src = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  src.buffer = buffer;
+  gain.gain.value = volume;
+  src.connect(gain);
+  gain.connect(ctx.destination);
+  src.start();
+  activeOscillators.push(src);
+  src.onended = () => {
+    activeOscillators = activeOscillators.filter(o => o !== src);
+  };
+  return src;
+}
+
+// ── Phase 1: CED / ANSam answer tone ──────────────────────────────────
+// ITU-T V.25: 2100 Hz with 180° phase reversals every 450±25ms.
+// The reversals signal V.32 echo-canceller capability to the caller.
+// Each reversal creates an audible transient "tick" in the tone.
+function generateCED(sr, durSec) {
+  const n = Math.floor(sr * durSec);
+  const buf = new Float32Array(n);
+  const f = 2100;
+  const revInterval = Math.floor(sr * 0.450);
+  let sign = 1;
+  for (let i = 0; i < n; i++) {
+    if (i > 0 && i % revInterval === 0) sign *= -1;
+    let env = 1.0;
+    const fadeIn = sr * 0.04, fadeOut = sr * 0.02;
+    if (i < fadeIn) env = i / fadeIn;
+    if (i > n - fadeOut) env = (n - i) / fadeOut;
+    buf[i] = sign * env * Math.sin(2 * Math.PI * f * i / sr);
+  }
+  return buf;
+}
+
+// ── Phase 2: V.32 probing / AC signal ────────────────────────────────
+// Answering modem transmits the AA then AC pattern: alternating BPSK
+// at 600 symbols/sec on a 1800 Hz carrier. Creates a distinctive
+// ~600 Hz warble as the symbol polarity flips each baud interval.
+function generateProbing(sr, durSec) {
+  const n = Math.floor(sr * durSec);
+  const buf = new Float32Array(n);
+  const carrier = 1800;
+  const sps = sr / 600;
+  for (let i = 0; i < n; i++) {
+    const sym = Math.floor(i / sps);
+    const sign = (sym % 2 === 0) ? 1 : -1;
+    const t = i / sr;
+    let env = 1.0;
+    if (i < sr * 0.01) env = i / (sr * 0.01);
+    if (i > n - sr * 0.01) env = (n - i) / (sr * 0.01);
+    buf[i] = env * sign * Math.cos(2 * Math.PI * carrier * t);
+  }
+  return buf;
+}
+
+// ── Phase 3/5: V.32bis scrambled QAM training ────────────────────────
+// Both modems transmit simultaneously on 1800 Hz carrier using
+// echo-cancelled full-duplex. Each sends scrambled QAM-128/16 symbols
+// at 2400 baud. The two independent streams create the characteristic
+// harsh broadband "screech" centered on 1800 Hz with ~2400 Hz bandwidth.
+// Raised-cosine pulse shaping limits spectral splatter (roll-off α≈0.3).
+function generateTraining(sr, durSec, symbolRate, dual) {
+  const n = Math.floor(sr * durSec);
+  const buf = new Float32Array(n);
+  const carrier = 1800;
+  const sps = sr / symbolRate;
+  const numSym = Math.ceil(n / sps) + 2;
+  const levels = [-3, -1, 1, 3];
+
+  function makeStream() {
+    const sI = [], sQ = [];
+    for (let s = 0; s < numSym; s++) {
+      sI.push(levels[Math.floor(Math.random() * 4)] / 3);
+      sQ.push(levels[Math.floor(Math.random() * 4)] / 3);
+    }
+    return { sI, sQ };
+  }
+
+  const streams = [makeStream()];
+  if (dual) streams.push(makeStream());
+
+  for (let i = 0; i < n; i++) {
+    const sp = i / sps;
+    const si = Math.floor(sp);
+    const frac = sp - si;
+    // Raised-cosine interpolation between symbol instants
+    const alpha = 0.5 * (1 - Math.cos(Math.PI * frac));
+    const t = i / sr;
+    const wt = 2 * Math.PI * carrier * t;
+    const cosW = Math.cos(wt);
+    const sinW = Math.sin(wt);
+
+    let sample = 0;
+    for (const st of streams) {
+      const I = st.sI[si] * (1 - alpha) + st.sI[si + 1] * alpha;
+      const Q = st.sQ[si] * (1 - alpha) + st.sQ[si + 1] * alpha;
+      // QAM: I·cos(ωt) − Q·sin(ωt)
+      sample += I * cosW - Q * sinW;
+    }
+
+    let env = 1.0;
+    if (i < sr * 0.015) env = i / (sr * 0.015);
+    if (i > n - sr * 0.015) env = (n - i) / (sr * 0.015);
+    buf[i] = env * sample / streams.length;
+  }
+  return buf;
+}
+
+// ── Phase 4: V.32bis rate signal exchange ────────────────────────────
+// Modems exchange rate sequences (R1, R2, R3) to agree on the highest
+// mutually supported speed: 14400, 12000, 9600, 7200, or 4800 bps.
+// Uses deterministic repeating patterns → more tonal than training.
+function generateRateExchange(sr, durSec) {
+  const n = Math.floor(sr * durSec);
+  const buf = new Float32Array(n);
+  const carrier = 1800;
+  const sps = sr / 2400;
+  const patI = [1, 1, -1, -1, 1, -1, 1, -1, -1, 1, 1, -1];
+  const patQ = [-1, 1, 1, -1, -1, 1, -1, 1, 1, -1, -1, 1];
+
+  for (let i = 0; i < n; i++) {
+    const si = Math.floor(i / sps) % patI.length;
+    const t = i / sr;
+    const wt = 2 * Math.PI * carrier * t;
+    let env = 1.0;
+    if (i < sr * 0.005) env = i / (sr * 0.005);
+    if (i > n - sr * 0.005) env = (n - i) / (sr * 0.005);
+    buf[i] = env * 0.8 * (patI[si] * Math.cos(wt) - patQ[si] * Math.sin(wt));
+  }
+  return buf;
+}
+
+// ── Phase 6: Equalizer convergence ───────────────────────────────────
+// Adaptive equalizer coefficients converge as training progresses.
+// Symbol scatter gradually tightens (reduced amplitude spread),
+// producing a sound that narrows and quiets as lock is achieved.
+function generateEqConvergence(sr, durSec) {
+  const n = Math.floor(sr * durSec);
+  const buf = new Float32Array(n);
+  const carrier = 1800;
+  const sps = sr / 2400;
+  const numSym = Math.ceil(n / sps) + 2;
+  const levels = [-3, -1, 1, 3];
+
+  const sI = [], sQ = [];
+  for (let s = 0; s < numSym; s++) {
+    // Constellation scatter tightens over time
+    const progress = s / numSym;
+    const spread = 1.0 - progress * 0.7;
+    sI.push(levels[Math.floor(Math.random() * 4)] / 3 * spread);
+    sQ.push(levels[Math.floor(Math.random() * 4)] / 3 * spread);
+  }
+
+  for (let i = 0; i < n; i++) {
+    const sp = i / sps;
+    const si = Math.floor(sp);
+    const frac = sp - si;
+    const alpha = 0.5 * (1 - Math.cos(Math.PI * frac));
+    const I = sI[si] * (1 - alpha) + sI[si + 1] * alpha;
+    const Q = sQ[si] * (1 - alpha) + sQ[si + 1] * alpha;
+    const t = i / sr;
+    const wt = 2 * Math.PI * carrier * t;
+
+    let env = 1.0;
+    if (i > n - sr * 0.06) env = (n - i) / (sr * 0.06);
+    buf[i] = env * (I * Math.cos(wt) - Q * Math.sin(wt));
+  }
+  return buf;
+}
+
+// ── Phase 7: MNP Class 4 link negotiation ────────────────────────────
+// After V.32bis physical layer locks, V.42 detection occurs in-band.
+// Falling back to MNP, the modems exchange HDLC-framed:
+//   LR (Link Request)  → originator proposes MNP4 parameters
+//   LA (Link Acknowledge) → answerer confirms
+// MNP4 adds: optimised data phase (stream mode), adaptive packet
+// assembly, and data phase optimisation for throughput.
+function generateMNP4(sr, durSec) {
+  const n = Math.floor(sr * durSec);
+  const buf = new Float32Array(n);
+  const carrier = 1800;
+  const sps = sr / 2400;
+  const levels = [-3, -1, 1, 3];
+
+  const lrEnd   = Math.floor(n * 0.38);
+  const laStart = Math.floor(n * 0.48);
+  const laEnd   = Math.floor(n * 0.82);
+
+  function fillFrame(start, end) {
+    const fLen = Math.ceil((end - start) / sps) + 2;
+    const fI = [], fQ = [];
+    for (let s = 0; s < fLen; s++) {
+      fI.push(levels[Math.floor(Math.random() * 4)] / 3);
+      fQ.push(levels[Math.floor(Math.random() * 4)] / 3);
+    }
+    for (let i = start; i < end; i++) {
+      const localI = i - start;
+      const sp = localI / sps;
+      const si = Math.floor(sp);
+      const frac = sp - si;
+      const alpha = 0.5 * (1 - Math.cos(Math.PI * frac));
+      const I = fI[si] * (1 - alpha) + fI[si + 1] * alpha;
+      const Q = fQ[si] * (1 - alpha) + fQ[si + 1] * alpha;
+      const t = i / sr;
+      const wt = 2 * Math.PI * carrier * t;
+      let env = 1.0;
+      if (localI < sr * 0.004) env = localI / (sr * 0.004);
+      if (i > end - sr * 0.004) env = (end - i) / (sr * 0.004);
+      buf[i] = env * 0.7 * (I * Math.cos(wt) - Q * Math.sin(wt));
+    }
+  }
+
+  fillFrame(0, lrEnd);
+  fillFrame(laStart, laEnd);
+  return buf;
+}
+
+// ── Master: concatenate all V.32bis + MNP4 phases into one buffer ────
+function generateFullNegotiation(sr) {
+  const phases = [
+    generateCED(sr, 3.3),                      //  0: CED w/ phase reversals
+    new Float32Array(Math.floor(sr * 0.075)),   //  1: silence
+    generateProbing(sr, 0.8),                   //  2: V.32 AC probing
+    generateTraining(sr, 2.0, 2400, true),      //  3: scrambled training (duplex)
+    generateRateExchange(sr, 0.4),              //  4: rate signal R1-R3
+    generateTraining(sr, 1.8, 2400, true),      //  5: retrain at agreed rate
+    generateEqConvergence(sr, 1.2),             //  6: equalizer convergence
+    new Float32Array(Math.floor(sr * 0.20)),    //  7: silence (V.42 detect)
+    generateMNP4(sr, 0.6),                      //  8: MNP4 LR / LA
+    new Float32Array(Math.floor(sr * 0.30)),    //  9: final silence
+  ];
+  const total = phases.reduce((s, p) => s + p.length, 0);
+  const result = new Float32Array(total);
+  let off = 0;
+  for (const p of phases) { result.set(p, off); off += p.length; }
+  return result;
+}
+
+// ── Orchestrate V.32bis negotiation: audio only, no terminal output ──
+// A real modem produces no screen output during negotiation — you just
+// hear the handshake through the speaker, then get the CONNECT result.
+async function playV32bisNegotiation(signal) {
+  const ctx = ensureAudio();
+  const audioData = generateFullNegotiation(ctx.sampleRate);
+  playPCMBuffer(audioData, 0.15);
+
+  // Total audio duration: 3300+75+800+2000+400+1800+1200+200+600+300 = 10675 ms
+  // Just wait for the audio to finish. No terminal output.
+  await sleep(10675, signal);
+}
+
+// Noise burst for "line pickup" click
+function playClickNoise() {
+  const ctx = ensureAudio();
+  const bufferSize = ctx.sampleRate * 0.05;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.15));
+  }
+  const src = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  src.buffer = buffer;
+  gain.gain.value = 0.3;
+  src.connect(gain);
+  gain.connect(ctx.destination);
+  src.start();
+}
+
+// ─── Dial sequence ──────────────────────────────────────────────────────
+async function dialSequence(number) {
+  const signal = abortController.signal;
+  const target = resolveDialTarget(number);
+
+  modem.state = 'dialing';
+  modem.lastDialed = number;
+  setStatus('DIALING');
+  ledOn('oh');
+  ledOn('sd');
+
+  try {
+    // Off-hook click
+    playClickNoise();
+    await sleep(300, signal);
+
+    // Dial tone
+    if (modem.speaker) {
+      await playDialTone(1500, signal);
+      await sleep(200, signal);
+    } else {
+      await sleep(1700, signal);
+    }
+
+    // DTMF digits
+    const digits = number.replace(/[^0-9*#]/g, '');
+    for (const digit of digits) {
+      if (modem.speaker) {
+        await playDTMF(digit, signal);
+      } else {
+        await sleep(150, signal);
+      }
+    }
+
+    await sleep(500, signal);
+
+    // If we have a real target, try the WebSocket proxy connection
+    // during the ringback / negotiation sequence
+    let wsConnected = false;
+    let wsError = null;
+    let wsPromise = null;
+
+    if (target) {
+      // Start WebSocket connection in parallel with ringback audio
+      wsPromise = new Promise((resolve) => {
+        try {
+          const wsUrl = PROXY_URL + '/?host=' +
+            encodeURIComponent(target.host) + '&port=' + target.port;
+          ws = new WebSocket(wsUrl);
+          ws.binaryType = 'arraybuffer';
+
+          ws.onopen = () => { /* proxy connected, wait for TCP connected msg */ };
+
+          ws.onmessage = (evt) => {
+            // First message might be JSON { type: 'connected' }
+            if (!wsConnected) {
+              try {
+                const msg = JSON.parse(typeof evt.data === 'string' ? evt.data :
+                  new TextDecoder().decode(evt.data));
+                if (msg.type === 'connected') {
+                  wsConnected = true;
+                  resolve('connected');
+                  return;
+                }
+                if (msg.type === 'error') {
+                  wsError = msg.message;
+                  resolve('error');
+                  return;
+                }
+              } catch(e) {
+                // Not JSON — it's raw telnet data arriving before our connect msg
+                // Treat as connected
+                wsConnected = true;
+                resolve('connected');
+                // Buffer this data for after negotiation
+                if (!modem._earlyData) modem._earlyData = [];
+                modem._earlyData.push(evt.data);
+                return;
+              }
+            }
+
+            // Once in data mode, this handler is replaced below
+            if (modem._earlyData) modem._earlyData.push(evt.data);
+          };
+
+          ws.onerror = () => {
+            wsError = 'Proxy not reachable (is proxy.js running?)';
+            resolve('error');
+          };
+
+          ws.onclose = () => {
+            if (!wsConnected) {
+              wsError = wsError || 'Connection closed';
+              resolve('error');
+            }
+          };
+
+          // Timeout after 15 seconds
+          setTimeout(() => {
+            if (!wsConnected && !wsError) {
+              wsError = 'Connection timed out';
+              resolve('timeout');
+            }
+          }, 15000);
+        } catch(e) {
+          wsError = e.message;
+          resolve('error');
+        }
+      });
+    }
+
+    // Ringback
+    modem.state = 'ringing';
+    setStatus('RINGING');
+
+    if (modem.speaker) {
+      await playRingback(1, signal);
+    } else {
+      await sleep(3000, signal);
+    }
+
+    // If we had a real target, check if the proxy/TCP connected
+    if (target && wsPromise) {
+      const result = await wsPromise;
+      if (result !== 'connected') {
+        // Connection failed
+        stopAllSounds();
+        modem.state = 'command';
+        ledOff('cd'); ledOff('oh'); ledOff('sd');
+        setStatus('READY');
+        println('');
+        resultCode('NO CARRIER');
+        if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+        return;
+      }
+    }
+
+    // "Answer" — remote modem picks up
+    modem.state = 'negotiating';
+    setStatus('V.32bis NEGOTIATING');
+    ledOn('cd');
+
+    playClickNoise();
+    await sleep(300, signal);
+
+    // V.32bis carrier negotiation + MNP4 link setup
+    if (modem.speaker) {
+      await playV32bisNegotiation(signal);
+    } else {
+      await sleep(10500, signal);
+    }
+
+    stopAllSounds();
+
+    // Connected at 14400 with MNP4 error correction
+    modem.state = 'connected';
+    modem.connectedBaud = 14400;
+    setStatus('CONNECT 14400/ARQ/MNP4');
+    ledOff('sd');
+
+    await sleep(300, signal);
+    println('');
+    resultCode('CONNECT 14400/ARQ/V42b/MNP4');
+
+    if (target && wsConnected && ws) {
+      // Real connection — enter live terminal mode
+      enterDataMode();
+    } else {
+      // No real target — simulate like before
+      await simulateConnection(signal);
+    }
+
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      stopAllSounds();
+      if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
+      return;
+    }
+    throw e;
+  }
+}
+
+// ─── Simulated connection (no real host) ────────────────────────────────
+async function simulateConnection(signal) {
+  const junkChars = '~@#$%^&*()_+[]{}|;:,.<>?/`ABCDEFabcdef0123456789';
+  try {
+    for (let burst = 0; burst < 3; burst++) {
+      await sleep(2000 + Math.random() * 3000, signal);
+      ledOn('rd');
+      const len = 10 + Math.floor(Math.random() * 40);
+      let line = '';
+      for (let i = 0; i < len; i++) {
+        line += junkChars[Math.floor(Math.random() * junkChars.length)];
+      }
+      print(line + '\r\n');
+      await sleep(100, signal);
+      ledOff('rd');
+    }
+
+    await sleep(3000, signal);
+
+    modem.state = 'command';
+    modem.connectedBaud = 0;
+    ledOff('cd');
+    ledOff('oh');
+    setStatus('READY');
+    println('');
+    resultCode('NO CARRIER');
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    throw e;
+  }
+}
+
+// ─── xterm.js terminal for live BBS sessions ───────────────────────────
+let term = null;
+const xtermContainer = document.getElementById('xterm-container');
+
+// Telnet option codes we care about
+const TELOPT = {
+  ECHO: 1, SGA: 3, TTYPE: 24, NAWS: 31,
+  // Commands
+  SE: 240, SB: 250, WILL: 251, WONT: 252, DO: 253, DONT: 254, IAC: 255,
+};
+
+// ─── CP437 → Unicode translation ────────────────────────────────────────
+// BBSes use IBM PC Code Page 437 for ANSI art. Bytes 0x00-0x7F are ASCII;
+// bytes 0x80-0xFF map to special glyphs (box drawing, block elements, etc.)
+// We translate to Unicode so xterm.js renders them correctly.
+const CP437 = [
+  // 0x80 - 0x8F
+  0x00C7,0x00FC,0x00E9,0x00E2,0x00E4,0x00E0,0x00E5,0x00E7,
+  0x00EA,0x00EB,0x00E8,0x00EF,0x00EE,0x00EC,0x00C4,0x00C5,
+  // 0x90 - 0x9F
+  0x00C9,0x00E6,0x00C6,0x00F4,0x00F6,0x00F2,0x00FB,0x00F9,
+  0x00FF,0x00D6,0x00DC,0x00A2,0x00A3,0x00A5,0x20A7,0x0192,
+  // 0xA0 - 0xAF
+  0x00E1,0x00ED,0x00F3,0x00FA,0x00F1,0x00D1,0x00AA,0x00BA,
+  0x00BF,0x2310,0x00AC,0x00BD,0x00BC,0x00A1,0x00AB,0x00BB,
+  // 0xB0 - 0xBF  (box drawing light)
+  0x2591,0x2592,0x2593,0x2502,0x2524,0x2561,0x2562,0x2556,
+  0x2555,0x2563,0x2551,0x2557,0x255D,0x255C,0x255B,0x2510,
+  // 0xC0 - 0xCF
+  0x2514,0x2534,0x252C,0x251C,0x2500,0x253C,0x255E,0x255F,
+  0x255A,0x2554,0x2569,0x2566,0x2560,0x2550,0x256C,0x2567,
+  // 0xD0 - 0xDF
+  0x2568,0x2564,0x2565,0x2559,0x2558,0x2552,0x2553,0x256B,
+  0x256A,0x2518,0x250C,0x2588,0x2584,0x258C,0x2590,0x2580,
+  // 0xE0 - 0xEF
+  0x03B1,0x00DF,0x0393,0x03C0,0x03A3,0x03C3,0x00B5,0x03C4,
+  0x03A6,0x0398,0x03A9,0x03B4,0x221E,0x03C6,0x03B5,0x2229,
+  // 0xF0 - 0xFF
+  0x2261,0x00B1,0x2265,0x2264,0x2320,0x2321,0x00F7,0x2248,
+  0x00B0,0x2219,0x00B7,0x221A,0x207F,0x00B2,0x25A0,0x00A0,
+];
+
+// Also map low control chars 0x01-0x1F to their CP437 glyphs
+// (BBSes sometimes use these for smiley faces, card suits, etc.)
+const CP437_LOW = [
+  0x0000, // 0x00 NUL
+  0x263A, // 0x01 ☺
+  0x263B, // 0x02 ☻
+  0x2665, // 0x03 ♥
+  0x2666, // 0x04 ♦
+  0x2663, // 0x05 ♣
+  0x2660, // 0x06 ♠
+  0x2022, // 0x07 •  (BEL)
+  0x0008, // 0x08 BS  (keep as control)
+  0x0009, // 0x09 TAB (keep as control)
+  0x000A, // 0x0A LF  (keep as control)
+  0x2642, // 0x0B ♂
+  0x2640, // 0x0C ♀
+  0x000D, // 0x0D CR  (keep as control)
+  0x266B, // 0x0E ♫
+  0x263C, // 0x0F ☼
+  0x25BA, // 0x10 ►
+  0x25C4, // 0x11 ◄
+  0x2195, // 0x12 ↕
+  0x203C, // 0x13 ‼
+  0x00B6, // 0x14 ¶
+  0x00A7, // 0x15 §
+  0x25AC, // 0x16 ▬
+  0x21A8, // 0x17 ↨
+  0x2191, // 0x18 ↑
+  0x2193, // 0x19 ↓
+  0x2192, // 0x1A →
+  0x001B, // 0x1B ESC (keep — starts ANSI sequences)
+  0x221F, // 0x1C ∟
+  0x2194, // 0x1D ↔
+  0x25B2, // 0x1E ▲
+  0x25BC, // 0x1F ▼
+];
+
+// Translate a Uint8Array of CP437 bytes → UTF-16 string for xterm
+function cp437ToUnicode(bytes) {
+  let str = '';
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    if (b >= 0x80) {
+      str += String.fromCharCode(CP437[b - 0x80]);
+    } else if (b >= 0x20 || b === 0x08 || b === 0x09 || b === 0x0A || b === 0x0D || b === 0x1B) {
+      // Printable ASCII + control chars that xterm needs to see
+      str += String.fromCharCode(b);
+    } else if (b > 0 && b < 0x20) {
+      // Low CP437 graphic chars (smileys, card suits, arrows, etc.)
+      str += String.fromCharCode(CP437_LOW[b]);
+    }
+    // 0x00 NUL is dropped
+  }
+  return str;
+}
+
+// Filter telnet IAC sequences from raw bytes, respond to negotiations.
+// Accepts ECHO and SGA (critical for interactive BBSes), offers
+// terminal type and window size. Refuses everything else.
+function filterTelnetIAC(bytes) {
+  const out = [];
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] !== 255) { out.push(bytes[i]); continue; }
+    if (i + 1 >= bytes.length) { out.push(bytes[i]); continue; }
+
+    const cmd = bytes[i + 1];
+
+    // IAC IAC → literal 0xFF
+    if (cmd === 255) { out.push(255); i++; continue; }
+
+    // 3-byte commands: WILL/WONT/DO/DONT
+    if (cmd >= 251 && cmd <= 254 && i + 2 < bytes.length) {
+      const opt = bytes[i + 2];
+      i += 2;
+
+      if (ws && ws.readyState === 1) {
+        const resp = new Uint8Array(3);
+        resp[0] = 255;
+
+        if (cmd === TELOPT.WILL) {
+          // Server offers: accept ECHO and SGA, refuse rest
+          resp[1] = (opt === TELOPT.ECHO || opt === TELOPT.SGA) ? TELOPT.DO : TELOPT.DONT;
+          resp[2] = opt;
+          ws.send(resp);
+        } else if (cmd === TELOPT.DO) {
+          // Server requests we do something: accept SGA, TTYPE, NAWS; refuse rest
+          if (opt === TELOPT.SGA || opt === TELOPT.TTYPE || opt === TELOPT.NAWS) {
+            resp[1] = TELOPT.WILL;
+            resp[2] = opt;
+            ws.send(resp);
+            // If NAWS, immediately send our window size
+            if (opt === TELOPT.NAWS && term) {
+              const naws = new Uint8Array(9);
+              naws[0] = 255; naws[1] = TELOPT.SB; naws[2] = TELOPT.NAWS;
+              naws[3] = 0; naws[4] = term.cols;  // cols high/low
+              naws[5] = 0; naws[6] = term.rows;  // rows high/low
+              naws[7] = 255; naws[8] = TELOPT.SE;
+              ws.send(naws);
+            }
+          } else {
+            resp[1] = TELOPT.WONT;
+            resp[2] = opt;
+            ws.send(resp);
+          }
+        } else if (cmd === TELOPT.WONT || cmd === TELOPT.DONT) {
+          // Acknowledgements — no response needed
+        }
+      }
+      continue;
+    }
+
+    // Sub-negotiation: IAC SB ... IAC SE
+    if (cmd === TELOPT.SB && i + 2 < bytes.length) {
+      const opt = bytes[i + 2];
+      i += 2;
+      // Collect sub-negotiation data
+      const sbData = [];
+      while (i + 1 < bytes.length) {
+        i++;
+        if (bytes[i] === 255 && i + 1 < bytes.length && bytes[i + 1] === TELOPT.SE) {
+          i++; break;
+        }
+        sbData.push(bytes[i]);
+      }
+      // Respond to terminal type request (SB TTYPE SEND)
+      if (opt === TELOPT.TTYPE && sbData[0] === 1 && ws && ws.readyState === 1) {
+        const ttype = 'ANSI';
+        const resp = new Uint8Array(6 + ttype.length);
+        resp[0] = 255; resp[1] = TELOPT.SB; resp[2] = TELOPT.TTYPE;
+        resp[3] = 0; // IS
+        for (let j = 0; j < ttype.length; j++) resp[4 + j] = ttype.charCodeAt(j);
+        resp[4 + ttype.length] = 255;
+        resp[5 + ttype.length] = TELOPT.SE;
+        ws.send(resp);
+      }
+      continue;
+    }
+
+    // Other 2-byte commands (GA, NOP, etc.) — skip
+    i++;
+  }
+  return new Uint8Array(out);
+}
+
+// ─── Baud rate limiter ──────────────────────────────────────────────────
+// Drips data into xterm at the emulated baud rate (14400 bps = 1440 cps).
+// Keeps ANSI escape sequences atomic — never splits mid-sequence, so
+// xterm.js doesn't misinterpret data chars as escape terminators.
+const baudLimiter = {
+  buf: '',       // single string buffer
+  timer: null,
+  cpsPerTick: 0,
+  tickMs: 16,    // ~60 fps tick rate
+  _accum: 0,
+
+  start(baud) {
+    this.buf = '';
+    this._accum = 0;
+    // baud / 10 bits-per-char = chars/sec; × tickMs/1000 = chars/tick
+    this.cpsPerTick = (baud / 10) * (this.tickMs / 1000);
+    this.timer = setInterval(() => this._drain(), this.tickMs);
+  },
+
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    if (term && this.buf.length > 0) term.write(this.buf);
+    this.buf = '';
+    this._accum = 0;
+  },
+
+  push(data) {
+    if (typeof data === 'string') {
+      this.buf += data;
+    } else {
+      // Shouldn't happen after CP437 conversion, but handle it
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+      for (let i = 0; i < bytes.length; i++) this.buf += String.fromCharCode(bytes[i]);
+    }
+  },
+
+  _drain() {
+    if (!term || this.buf.length === 0) return;
+
+    this._accum += this.cpsPerTick;
+    let budget = Math.floor(this._accum);
+    this._accum -= budget;
+    if (budget <= 0) return;
+
+    // Walk the buffer up to 'budget' visible characters,
+    // never breaking inside an ANSI escape sequence.
+    // If we hit an incomplete escape at the end, stop before it.
+    let end = 0;
+    let spent = 0;
+    while (end < this.buf.length && spent < budget) {
+      if (this.buf[end] === '\x1b') {
+        const seqEnd = this._findEscEnd(end);
+        if (seqEnd === -1) {
+          // Incomplete escape sequence — stop here, wait for more data
+          break;
+        }
+        end = seqEnd;
+        spent++;  // count whole escape seq as 1 char for rate purposes
+      } else {
+        end++;
+        spent++;
+      }
+    }
+
+    if (end > 0) {
+      ledOn('rd');
+      term.write(this.buf.substring(0, end));
+      this.buf = this.buf.substring(end);
+      setTimeout(() => ledOff('rd'), 30);
+    }
+  },
+
+  // Find the end index (exclusive) of an ANSI escape sequence starting at pos.
+  // Returns -1 if the sequence is incomplete (not enough data yet).
+  _findEscEnd(pos) {
+    const len = this.buf.length;
+    if (pos + 1 >= len) return -1;  // just ESC, no next char yet
+
+    const next = this.buf[pos + 1];
+
+    // CSI sequence: \x1b[ ... <terminator 0x40-0x7E>
+    if (next === '[') {
+      let i = pos + 2;
+      while (i < len) {
+        const c = this.buf.charCodeAt(i);
+        if (c >= 0x40 && c <= 0x7E) return i + 1;  // complete
+        i++;
+      }
+      return -1;  // incomplete — terminator hasn't arrived yet
+    }
+
+    // OSC sequence: \x1b] ... BEL or ST
+    if (next === ']') {
+      let i = pos + 2;
+      while (i < len) {
+        if (this.buf[i] === '\x07') return i + 1;
+        if (this.buf[i] === '\x1b' && i + 1 < len && this.buf[i + 1] === '\\') return i + 2;
+        i++;
+      }
+      return -1;  // incomplete
+    }
+
+    // Simple 2-char escape (e.g. \x1bM, \x1b=, \x1b>)
+    return pos + 2;
+  },
+};
+
+// ─── Color / Monochrome toggle ──────────────────────────────────────────
+let colorMode = false;  // false = green phosphor, true = ANSI color
+const colorToggle = document.getElementById('color-toggle');
+const toggleLabels = document.querySelectorAll('.toggle-label');
+
+// Green phosphor monochrome theme — all ANSI colors mapped to green shades
+const THEME_PHOSPHOR = {
+  background: 'rgba(0,0,0,0)',
+  foreground: '#00ff41',
+  cursor: '#00ff41',
+  cursorAccent: '#0d1a0d',
+  selectionBackground: 'rgba(0,255,65,0.25)',
+  selectionForeground: '#0d1a0d',
+  black: '#0d1a0d',
+  brightBlack: '#1a3a1a',
+  red: '#00cc33',
+  brightRed: '#00ee3c',
+  green: '#00ff41',
+  brightGreen: '#33ff66',
+  yellow: '#00dd38',
+  brightYellow: '#55ff77',
+  blue: '#00aa2e',
+  brightBlue: '#00cc33',
+  magenta: '#00bb30',
+  brightMagenta: '#00dd38',
+  cyan: '#00cc33',
+  brightCyan: '#00ee3c',
+  white: '#00ff41',
+  brightWhite: '#aaffbb',
+};
+
+// Full ANSI color theme — proper colors on dark background
+const THEME_COLOR = {
+  background: 'rgba(0,0,0,0)',
+  foreground: '#cccccc',
+  cursor: '#cccccc',
+  cursorAccent: '#0d1a0d',
+  selectionBackground: 'rgba(150,150,255,0.25)',
+  selectionForeground: '#0d1a0d',
+  black: '#0d0d0d',
+  brightBlack: '#555555',
+  red: '#ff4444',
+  brightRed: '#ff6666',
+  green: '#44ff44',
+  brightGreen: '#66ff66',
+  yellow: '#ffff44',
+  brightYellow: '#ffff88',
+  blue: '#4488ff',
+  brightBlue: '#66aaff',
+  magenta: '#ff44ff',
+  brightMagenta: '#ff88ff',
+  cyan: '#44ffff',
+  brightCyan: '#88ffff',
+  white: '#cccccc',
+  brightWhite: '#ffffff',
+};
+
+function applyColorMode() {
+  if (colorMode) {
+    colorToggle.classList.add('on');
+    toggleLabels[0].classList.remove('active');
+    toggleLabels[1].classList.add('active');
+  } else {
+    colorToggle.classList.remove('on');
+    toggleLabels[0].classList.add('active');
+    toggleLabels[1].classList.remove('active');
+  }
+  if (term) {
+    term.options.theme = colorMode ? THEME_COLOR : THEME_PHOSPHOR;
+  }
+}
+
+colorToggle.parentElement.addEventListener('click', () => {
+  colorMode = !colorMode;
+  applyColorMode();
+});
+
+// Initialize toggle labels
+toggleLabels[0].classList.add('active');
+
+// ─── Enter data mode: show xterm, wire I/O ──────────────────────────────
+function enterDataMode() {
+  if (!ws) return;
+
+  // Hide AT command terminal elements
+  hideInput();
+  outputEl.style.display = 'none';
+
+  // Create xterm.js instance locked to exactly 80 columns x 25 rows.
+  // We measure the container and pick a font size that makes the grid fit.
+  const TERM_COLS = 80;
+  const TERM_ROWS = 25;
+  const termFont = "'Cascadia Mono', 'Consolas', 'SF Mono', 'Menlo', 'DejaVu Sans Mono', 'Liberation Mono', 'Courier New', monospace";
+
+  // Show container first so we can measure it
+  xtermContainer.classList.add('active');
+
+  const containerW = xtermContainer.clientWidth;
+  const containerH = xtermContainer.clientHeight;
+
+  // Probe character cell size at a reference font size to find the ratio
+  const probe = document.createElement('span');
+  probe.style.fontFamily = termFont;
+  probe.style.fontSize = '20px';
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.whiteSpace = 'pre';
+  probe.textContent = 'W'.repeat(TERM_COLS);
+  document.body.appendChild(probe);
+  const refCellW = probe.offsetWidth / TERM_COLS;
+  const refCellH = probe.offsetHeight;
+  document.body.removeChild(probe);
+
+  // Compute the largest font size that fits both dimensions
+  const maxFontByW = Math.floor(20 * (containerW / (refCellW * TERM_COLS)));
+  const maxFontByH = Math.floor(20 * (containerH / (refCellH * TERM_ROWS)));
+  const bestFontSize = Math.min(maxFontByW, maxFontByH);
+
+  term = new Terminal({
+    theme: colorMode ? THEME_COLOR : THEME_PHOSPHOR,
+    fontFamily: termFont,
+    fontSize: bestFontSize,
+    lineHeight: 1.0,
+    letterSpacing: 0,
+    cols: TERM_COLS,
+    rows: TERM_ROWS,
+    cursorBlink: true,
+    cursorStyle: 'block',
+    scrollback: 2000,
+    convertEol: false,
+    allowTransparency: true,
+    allowProposedApi: true,
+  });
+
+  // Mount into container
+  term.open(xtermContainer);
+
+  term.focus();
+
+  // Keyboard input → WebSocket (character-at-a-time, like a real terminal)
+  term.onData((data) => {
+    if (ws && ws.readyState === 1) {
+      ledOn('sd');
+      ws.send(data);
+      setTimeout(() => ledOff('sd'), 50);
+    }
+  });
+
+  // Ctrl+] to hang up (standard telnet escape)
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.ctrlKey && e.key === ']' && e.type === 'keydown') {
+      dropCarrier('User hangup');
+      return false;
+    }
+    return true;
+  });
+
+  // Start baud rate limiter at emulated speed
+  baudLimiter.start(modem.connectedBaud);
+
+  // WebSocket data → baud limiter → xterm (with telnet IAC filtering)
+  ws.onmessage = (evt) => {
+    // Check for proxy JSON control messages
+    try {
+      const text = typeof evt.data === 'string' ? evt.data :
+        new TextDecoder().decode(evt.data);
+      const msg = JSON.parse(text);
+      if (msg.type === 'disconnected') { dropCarrier('Remote end closed'); return; }
+      if (msg.type === 'error') { dropCarrier(msg.message); return; }
+    } catch(e) { /* not JSON — normal telnet data */ }
+
+    if (evt.data instanceof ArrayBuffer) {
+      const clean = filterTelnetIAC(new Uint8Array(evt.data));
+      if (clean.length > 0) baudLimiter.push(cp437ToUnicode(clean));
+    } else {
+      baudLimiter.push(evt.data);
+    }
+  };
+
+  ws.onclose = () => {
+    if (modem.state === 'connected') dropCarrier('Connection closed');
+  };
+  ws.onerror = () => {
+    if (modem.state === 'connected') dropCarrier('Connection error');
+  };
+
+  // Flush any early data that arrived during negotiation
+  if (modem._earlyData) {
+    for (const chunk of modem._earlyData) {
+      if (chunk instanceof ArrayBuffer) {
+        const clean = filterTelnetIAC(new Uint8Array(chunk));
+        if (clean.length > 0) baudLimiter.push(cp437ToUnicode(clean));
+      } else {
+        baudLimiter.push(chunk);
+      }
+    }
+    modem._earlyData = null;
+  }
+}
+
+// ─── Drop carrier: tear down xterm, return to AT command mode ───────────
+function dropCarrier(reason) {
+  if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+  baudLimiter.stop();
+  modem.state = 'command';
+  modem.connectedBaud = 0;
+  modem._earlyData = null;
+  ledOff('cd');
+  ledOff('oh');
+  setStatus('READY');
+
+  // Tear down xterm
+  if (term) {
+    term.dispose();
+    term = null;
+  }
+  xtermContainer.classList.remove('active');
+  xtermContainer.innerHTML = '';
+
+  // Restore AT command terminal
+  outputEl.style.display = '';
+  println('');
+  if (reason) println('  (' + reason + ')');
+  resultCode('NO CARRIER');
+  showInput();
+}
+
+// ─── Result codes ───────────────────────────────────────────────────────
+const RESULT_CODES = {
+  'OK':            '0',
+  'CONNECT':       '1',
+  'RING':          '2',
+  'NO CARRIER':    '3',
+  'ERROR':         '4',
+  'CONNECT 1200':  '5',
+  'NO DIALTONE':   '6',
+  'BUSY':          '7',
+  'NO ANSWER':     '8',
+  'CONNECT 300':   '1',
+  'CONNECT 2400':  '10',
+  'CONNECT 4800':  '11',
+  'CONNECT 9600':  '12',
+  'CONNECT 14400': '13',
+  'CONNECT 14400/ARQ/V42b/MNP4': '13',
+};
+
+function resultCode(msg) {
+  if (modem.verbose) {
+    println(msg);
+  } else {
+    println(RESULT_CODES[msg] || '4');
+  }
+}
+
+// ─── AT Command Parser ─────────────────────────────────────────────────
+function processCommand(line) {
+  const raw = line.trim();
+
+  // Repeat last command
+  if (raw === 'A/' || raw === 'a/') {
+    if (modem._lastCmd) {
+      processATCommand(modem._lastCmd);
+    }
+    return;
+  }
+
+  if (!/^AT/i.test(raw)) {
+    resultCode('ERROR');
+    return;
+  }
+
+  modem._lastCmd = raw;
+  const cmd = raw.substring(2); // strip "AT"
+
+  if (cmd === '' || cmd === '\r') {
+    resultCode('OK');
+    return;
+  }
+
+  processATCommand(cmd);
+}
+
+function processATCommand(cmd) {
+  let i = 0;
+
+  while (i < cmd.length) {
+    const c = cmd[i].toUpperCase();
+    const rest = cmd.substring(i);
+
+    // ── Dial ──
+    if (c === 'D') {
+      const dialStr = cmd.substring(i + 1).replace(/^[TP]/i, ''); // skip T or P
+      hideInput();
+      abortController = new AbortController();
+      dialSequence(dialStr).then(() => {
+        // In data mode, enterDataMode() handles showing input
+        if (modem.state !== 'connected' || !ws) {
+          showInput();
+        }
+      });
+      return;
+    }
+
+    // ── Hang up ──
+    if (c === 'H') {
+      i++;
+      // skip optional 0
+      if (i < cmd.length && cmd[i] === '0') i++;
+      if (modem.state !== 'command') {
+        stopAllSounds();
+        if (abortController) abortController.abort();
+        // If connected, use dropCarrier for clean teardown
+        if (modem.state === 'connected' && ws) {
+          dropCarrier(null);
+          // dropCarrier already prints NO CARRIER; override with OK
+          return;
+        }
+        if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
+        modem.state = 'command';
+        modem.connectedBaud = 0;
+        modem._earlyData = null;
+        ledOff('cd');
+        ledOff('oh');
+        ledOff('sd');
+        setStatus('READY');
+      }
+      resultCode('OK');
+      return;
+    }
+
+    // ── On-hook (H1 = off-hook, unusual but supported) ──
+    if (c === 'O') {
+      i++;
+      if (modem.state === 'connected') {
+        println('');
+        resultCode('CONNECT ' + modem.connectedBaud);
+      } else {
+        resultCode('ERROR');
+      }
+      return;
+    }
+
+    // ── Echo ──
+    if (c === 'E') {
+      i++;
+      if (i < cmd.length && (cmd[i] === '0' || cmd[i] === '1')) {
+        modem.echo = cmd[i] === '1';
+        i++;
+      } else {
+        modem.echo = false;
+      }
+      continue;
+    }
+
+    // ── Verbose ──
+    if (c === 'V') {
+      i++;
+      if (i < cmd.length && (cmd[i] === '0' || cmd[i] === '1')) {
+        modem.verbose = cmd[i] === '1';
+        i++;
+      } else {
+        modem.verbose = true;
+      }
+      continue;
+    }
+
+    // ── Speaker mode ──
+    if (c === 'M') {
+      i++;
+      if (i < cmd.length && /[0-3]/.test(cmd[i])) {
+        modem.speaker = cmd[i] !== '0';
+        i++;
+      }
+      continue;
+    }
+
+    // ── Speaker volume ──
+    if (c === 'L') {
+      i++;
+      if (i < cmd.length && /[0-3]/.test(cmd[i])) {
+        modem.speakerVol = parseInt(cmd[i]);
+        i++;
+      }
+      continue;
+    }
+
+    // ── S-registers ──
+    if (c === 'S') {
+      i++;
+      let regNum = '';
+      while (i < cmd.length && /\d/.test(cmd[i])) { regNum += cmd[i]; i++; }
+      const reg = parseInt(regNum) || 0;
+
+      if (i < cmd.length && cmd[i] === '=') {
+        i++;
+        let val = '';
+        while (i < cmd.length && /\d/.test(cmd[i])) { val += cmd[i]; i++; }
+        modem.registers[reg] = parseInt(val) || 0;
+        continue;
+      } else if (i < cmd.length && cmd[i] === '?') {
+        i++;
+        const v = modem.registers[reg] || 0;
+        println(String(v).padStart(3, '0'));
+        continue;
+      }
+      continue;
+    }
+
+    // ── Reset ──
+    if (c === 'Z') {
+      i++;
+      if (i < cmd.length && /[0-9]/.test(cmd[i])) i++;
+      modem.echo = true;
+      modem.verbose = true;
+      modem.speaker = true;
+      stopAllSounds();
+      if (abortController) abortController.abort();
+      if (modem.state === 'connected' && ws) {
+        dropCarrier(null);
+      } else {
+        if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
+        modem.state = 'command';
+        modem._earlyData = null;
+        ledOff('cd');
+        ledOff('oh');
+        ledOff('sd');
+        setStatus('READY');
+      }
+      resultCode('OK');
+      return;
+    }
+
+    // ── Info / Identification ──
+    if (c === 'I') {
+      i++;
+      let level = '0';
+      if (i < cmd.length && /[0-9]/.test(cmd[i])) { level = cmd[i]; i++; }
+      switch (level) {
+        case '0': println('USRobotics Sportster 14400 Fax/Modem'); break;
+        case '1': println('POTS Web Emulator v1.0'); break;
+        case '2': println('OK'); break;
+        case '3': println('USRobotics Sportster 14400 Fax/Modem'); println('Rev. 1.0'); break;
+        case '4':
+          println('Modem Settings:');
+          println('  E' + (modem.echo ? '1' : '0') + '  V' + (modem.verbose ? '1' : '0') +
+                  '  M' + (modem.speaker ? '1' : '0') + '  L' + modem.speakerVol);
+          println('  S00=' + String(modem.registers[0]).padStart(3,'0') +
+                  '  S02=' + String(modem.registers[2]).padStart(3,'0') +
+                  '  S06=' + String(modem.registers[6]).padStart(3,'0') +
+                  '  S07=' + String(modem.registers[7]).padStart(3,'0'));
+          println('Protocol:');
+          println('  Modulation: V.32bis (14400/12000/9600/7200/4800)');
+          println('  Error Corr: MNP Class 4 (Optimised Data Phase)');
+          println('  Compression: V.42bis / MNP5');
+          println('  Carrier: 1800 Hz QAM, 2400 baud');
+          break;
+        default:  println('USRobotics Sportster 14400 Fax/Modem'); break;
+      }
+      continue;
+    }
+
+    // ── Ampersand commands ──
+    if (c === '&') {
+      i++;
+      if (i < cmd.length) {
+        const sub = cmd[i].toUpperCase();
+        i++;
+        // skip optional digit
+        if (i < cmd.length && /[0-9]/.test(cmd[i])) i++;
+        // We just silently accept &F, &C, &D, &K, etc.
+        continue;
+      }
+      continue;
+    }
+
+    // ── Anything else: skip unknown single commands ──
+    i++;
+  }
+
+  resultCode('OK');
+}
+
+// ─── Command mode key handler ───────────────────────────────────────────
+function commandKeyHandler(e) {
+  if (e.key === 'Enter') {
+    const line = inputEl.value;
+    if (modem.echo) {
+      println(line);
+    }
+    inputEl.value = '';
+    processCommand(line);
+  }
+
+  // Escape to abort during dialing/negotiating
+  if (e.key === 'Escape') {
+    if (modem.state !== 'command') {
+      stopAllSounds();
+      if (abortController) abortController.abort();
+      if (ws) { try { ws.close(); } catch(e2) {} ws = null; }
+      modem.state = 'command';
+      modem.connectedBaud = 0;
+      modem._earlyData = null;
+      ledOff('cd');
+      ledOff('oh');
+      ledOff('sd');
+      setStatus('READY');
+      println('');
+      resultCode('NO CARRIER');
+      showInput();
+    }
+  }
+}
+
+inputEl.addEventListener('keydown', commandKeyHandler);
+
+// Keep focus on input
+terminalEl.addEventListener('click', () => inputEl.focus());
+
+// ─── Boot message ───────────────────────────────────────────────────────
+function boot() {
+  println('USRobotics Sportster 14400 Fax/Modem');
+  println('POTS Web Emulator v1.0');
+  println('');
+  println('Press any key to initialize modem...');
+  println('');
+
+  const initHandler = () => {
+    document.removeEventListener('keydown', initHandler);
+    document.removeEventListener('click', initHandler);
+    ensureAudio();
+    outputEl.textContent = '';
+    println('ATZ');
+    println('OK');
+    println('');
+    println('V.32bis / MNP4 Modem Emulator');
+    println('');
+    println('Commands:');
+    println('  ATDT<num>  Dial (phone book or host:port)');
+    println('  ATH  Hang up    ATZ  Reset    ATI4 Info');
+    println('  ESC  Abort / disconnect');
+    println('');
+    println('Phone Book:');
+    for (const [num, entry] of Object.entries(PHONEBOOK)) {
+      const padNum = num.padEnd(10);
+      println('  ' + padNum + entry.name);
+      println('             ' + entry.host + ':' + entry.port);
+    }
+    println('');
+    println('Or dial direct: ATDT bbs.example.com:23');
+    println('');
+    println('NOTE: Run "node proxy.js" first for live connections.');
+    println('');
+    showInput();
+  };
+
+  hideInput();
+  document.addEventListener('keydown', initHandler);
+  document.addEventListener('click', initHandler);
+}
+
+boot();
+</script>
+</body>
+</html>
