@@ -1,26 +1,48 @@
-// ─── WebSocket-to-Telnet Proxy ──────────────────────────────────────
-// Bridges browser WebSocket connections to raw TCP (telnet) hosts.
+// ─── WebSocket-to-Telnet Proxy + Static Server ─────────────────────────
+// Bridges browser WebSocket connections to raw TCP (telnet) hosts,
+// and serves the frontend over HTTP from the same port.
 //
 // Usage:  node proxy.js [port]
-//         Default port: 8300
-//
-// The browser connects:  ws://localhost:8300/?host=HOSTNAME&port=TELNET_PORT
-// The proxy opens a raw TCP socket to HOSTNAME:TELNET_PORT and pipes
-// data bidirectionally between the WebSocket and the TCP socket.
+//         Default port: 8300  (Railway sets PORT automatically)
 
-const { WebSocketServer } = require('ws');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const net = require('net');
-const url = require('url');
+const { WebSocketServer } = require('ws');
 
-const LISTEN_PORT = parseInt(process.argv[2]) || 8300;
+const PORT = parseInt(process.env.PORT || process.argv[2]) || 8300;
 
-const wss = new WebSocketServer({ port: LISTEN_PORT });
+// ── HTTP server: serve index.html ───────────────────────────────────────
+const indexPath = path.join(__dirname, 'index.html');
 
-console.log(`POTS Telnet Proxy listening on ws://localhost:${LISTEN_PORT}`);
-console.log('Waiting for modem connections...\n');
+const server = http.createServer((req, res) => {
+  if (req.url === '/' || req.url === '/index.html') {
+    fs.readFile(indexPath, (err, data) => {
+      if (err) {
+        res.writeHead(500);
+        res.end('Error loading index.html');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(data);
+    });
+  } else {
+    res.writeHead(404);
+    res.end('Not found');
+  }
+});
+
+// ── WebSocket server: attach to the same HTTP server ────────────────────
+const wss = new WebSocketServer({ server });
+
+server.listen(PORT, () => {
+  console.log(`POTS Telnet Proxy listening on http://localhost:${PORT}`);
+  console.log('Waiting for modem connections...\n');
+});
 
 wss.on('connection', (ws, req) => {
-  const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+  const params = new URL(req.url, `http://localhost:${PORT}`).searchParams;
   const host = params.get('host');
   const port = parseInt(params.get('port')) || 23;
 
@@ -70,7 +92,6 @@ wss.on('connection', (ws, req) => {
   // WebSocket → TCP (browser keystrokes → telnet)
   ws.on('message', (data) => {
     if (tcp.writable) {
-      // data comes as Buffer or string from browser
       tcp.write(data);
     }
   });

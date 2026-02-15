@@ -394,7 +394,7 @@ const PHONEBOOK = {
   '5555678':  { host: 'bbs.retrocampus.com',  port: 23,   name: 'Retro Campus' },
 };
 
-const PROXY_URL = 'ws://localhost:8300';
+const PROXY_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
 
 // Resolve a dial string to { host, port, name }
 function resolveDialTarget(dialStr) {
